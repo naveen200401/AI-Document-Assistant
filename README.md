@@ -4,9 +4,17 @@
 
 AI Document Assistant is a full-stack platform that intelligently generates multi-page reports and presentations. Users can enter a topic, generate comprehensive content page-by-page, refine with AI assistance, and export to professional **DOCX** and **PPTX** formats.
 
+## 🌐 Live Demo
+
+**Try it now without installation:**  
+### 👉 [https://ai-document-assistant-1-vidd.onrender.com](https://ai-document-assistant-1-vidd.onrender.com)
+
+> No download required! Create an account and start generating documents instantly.
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Flask](https://img.shields.io/badge/flask-2.3+-green.svg)](https://flask.palletsprojects.com/)
+[![Live Demo](https://img.shields.io/badge/demo-live-success.svg)](https://ai-document-assistant-1-vidd.onrender.com)
 
 ---
 
@@ -86,6 +94,8 @@ AI Document Assistant is a full-stack platform that intelligently generates mult
 
 ## 🚀 Quick Start
 
+> 💡 **Prefer to try before installing?** Check out the [live demo](https://ai-document-assistant-1-vidd.onrender.com) first!
+
 ### Prerequisites
 
 - **Python 3.8+** ([Download](https://www.python.org/downloads/))
@@ -95,8 +105,8 @@ AI Document Assistant is a full-stack platform that intelligently generates mult
 ### 1️⃣ Clone Repository
 
 ```bash
-git clone https://github.com/<your-username>/ai-docs-platform.git
-cd ai-docs-platform
+git clone https://github.com/naveen200401/AI-Document-Assistant.git
+cd AI-Document-Assistant
 ```
 
 ### 2️⃣ Backend Setup
@@ -406,9 +416,10 @@ See [LICENSE](LICENSE) file for details.
 
 ## 📧 Contact & Support
 
-- **Issues:** [GitHub Issues](https://github.com/naveen200401/ai-docs-platform/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/naveen200401/ai-docs-platform/discussions)
+- **Issues:** [GitHub Issues](https://github.com/naveen200401/AI-Document-Assistant/issues)
+- **Discussions:** [GitHub Discussions](https://github.com/naveen200401/AI-Document-Assistant/discussions)
 - **Email:** naveenchandu200401@gmail.com
+- **Live Demo:** [Try it now](https://ai-document-assistant-1-vidd.onrender.com)
 
 ---
 
@@ -417,5 +428,7 @@ See [LICENSE](LICENSE) file for details.
 **Made with ❤️ using Gemini AI**
 
 ⭐ Star this repo if you find it helpful!
+
+[Report Bug](https://github.com/naveen200401/AI-Document-Assistant/issues) · [Request Feature](https://github.com/naveen200401/AI-Document-Assistant/issues) · [Live Demo](https://ai-document-assistant-1-vidd.onrender.com)
 
 </div>
