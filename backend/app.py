@@ -98,10 +98,11 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, col_def: s
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
         conn.commit()
 
-
 def init_db():
     conn = db_conn()
     cur = conn.cursor()
+
+    # Base schema (will only run on a brand-new DB)
     cur.executescript(
         """
     CREATE TABLE IF NOT EXISTS documents (
@@ -148,12 +149,16 @@ def init_db():
     );
     """
     )
+
+    # 🔧 MIGRATION: ensure `owner_email` column exists on existing DBs
+    cur.execute("PRAGMA table_info(documents)")
+    cols = [row["name"] for row in cur.fetchall()]
+    if "owner_email" not in cols:
+        cur.execute("ALTER TABLE documents ADD COLUMN owner_email TEXT")
+
     conn.commit()
-
-    # 🔧 Auto-migration for older DBs (no owner_email column):
-    _ensure_column(conn, "documents", "owner_email", "TEXT")
-
     conn.close()
+
 
 
 def serialize_document(doc_id: int) -> Optional[Dict[str, Any]]:
@@ -879,11 +884,9 @@ with app.app_context():
     init_db()
 
 # =========================================
-# Main entry
+# Main entry (local dev)
 # =========================================
 if __name__ == "__main__":
-    init_db()
-
     port = int(os.environ.get("PORT", "5001"))
     print(
         f"Starting AI Docs backend (Gemini) on port {port} "
@@ -891,6 +894,4 @@ if __name__ == "__main__":
         f"PPTX_AVAILABLE={PPTX_AVAILABLE}, DOCX_AVAILABLE={DOCX_AVAILABLE}, "
         f"PDF_AVAILABLE={PDF_AVAILABLE})"
     )
-
-    # On Render, debug=False is safer, but locally you can enable debug if you want.
     app.run(host="0.0.0.0", port=port)
