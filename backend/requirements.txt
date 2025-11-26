@@ -10,3 +10,4 @@ flask-cors==3.0.10
 google-generativeai
 python-docx
 reportlab
+gunicorn
