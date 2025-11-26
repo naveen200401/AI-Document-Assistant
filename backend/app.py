@@ -86,6 +86,19 @@ def db_conn() -> sqlite3.Connection:
     return conn
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, col_def: str):
+    """
+    Ensure a column exists on a table; if not, add it via ALTER TABLE.
+    Safe to run on every startup.
+    """
+    cur = conn.execute(f"PRAGMA table_info({table})")
+    cols = [row["name"] if isinstance(row, sqlite3.Row) else row[1] for row in cur.fetchall()]
+    if column not in cols:
+        print(f"[DB MIGRATION] Adding column '{column}' to table '{table}'")
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
+        conn.commit()
+
+
 def init_db():
     conn = db_conn()
     cur = conn.cursor()
@@ -136,6 +149,10 @@ def init_db():
     """
     )
     conn.commit()
+
+    # 🔧 Auto-migration for older DBs (no owner_email column):
+    _ensure_column(conn, "documents", "owner_email", "TEXT")
+
     conn.close()
 
 
@@ -179,10 +196,8 @@ def serialize_document(doc_id: int) -> Optional[Dict[str, Any]]:
 def _extract_gemini_text(resp: Any) -> Optional[str]:
     """
     Safely extract plain text from a google-generativeai response object.
-
-    We intentionally do NOT rely only on resp.text, because in some SDK
-    versions it raises when finish_reason != OK.
     """
+
     # 1) Try the .text property
     try:
         t = getattr(resp, "text", None)
@@ -212,7 +227,7 @@ def _extract_gemini_text(resp: Any) -> Optional[str]:
     except Exception as e:
         print("candidate.parts extraction failed:", e)
 
-    # 3) Last resort: string representation
+    # 3) Fallback to string repr
     try:
         s = str(resp)
         if s.strip():
@@ -240,7 +255,6 @@ def call_gemini_text(prompt: str, model_name: Optional[str] = None) -> str:
 
     text = _extract_gemini_text(resp)
     if not text or not text.strip():
-        # try to expose finish_reason for debugging
         finish_reason = None
         try:
             candidates = getattr(resp, "candidates", None) or []
@@ -316,14 +330,13 @@ def health():
 
 
 # =========================================
-# Documents list / create (per-user via owner_email)
+# Documents list / create
 # =========================================
 @app.route("/api/documents", methods=["GET", "POST"])
 def documents():
     conn = db_conn()
     cur = conn.cursor()
 
-    # CREATE NEW DOCUMENT
     if request.method == "POST":
         data = request.get_json(force=True)
         title = data.get("title") or "Untitled"
@@ -340,7 +353,7 @@ def documents():
         conn.close()
         return jsonify({**dict(doc), "sections": []}), 201
 
-    # LIST DOCUMENTS FOR LOGGED-IN USER
+    # GET: list documents for a specific user
     owner_email = request.args.get("owner_email", "").strip()
     rows = cur.execute(
         "SELECT * FROM documents WHERE owner_email = ? ORDER BY datetime(created_at) DESC, id DESC",
@@ -366,11 +379,10 @@ def get_document(doc_id):
     # If an owner_email is provided, document must belong to that email
     if owner_email and (doc["owner_email"] or "") != owner_email:
         conn.close()
-        # Pretend it doesn't exist for other users
         return jsonify({"error": "document not found"}), 404
 
     sections = conn.execute(
-        "SELECT * FROM sections WHERE document_id = ? ORDER BY position",
+        "SELECT * FROM sections WHERE document_id = ? ORDER BY position, id",
         (doc_id,),
     ).fetchall()
 
@@ -404,7 +416,7 @@ def generate_document(doc_id: int):
     user_prompt = (data.get("prompt") or "").strip()
     theme = (data.get("theme") or "").strip()
     pages = int(data.get("pages") or 1)
-    pages = max(1, min(pages, 30))  # simple safety cap
+    pages = max(1, min(pages, 30))  # safety cap
 
     if not user_prompt:
         return jsonify({"error": "prompt is required"}), 400
@@ -415,7 +427,7 @@ def generate_document(doc_id: int):
         conn.close()
         return jsonify({"error": "document not found"}), 404
 
-    # Clean existing sections & related rows for this doc
+    # Remove old sections and related rows
     sec_rows = conn.execute(
         "SELECT id FROM sections WHERE document_id = ?", (doc_id,)
     ).fetchall()
@@ -430,10 +442,10 @@ def generate_document(doc_id: int):
 
     # Generate each page
     for i in range(pages):
-        heading = f"Page {i+1}"
+        heading = f"Page {i + 1}"
         page_prompt = (
             "You are a document author. Generate the content for page "
-            f"{i+1} of {pages} for the user prompt.\n\n"
+            f"{i + 1} of {pages} for the user prompt.\n\n"
             f"USER_PROMPT:\n{user_prompt}\n\n"
             "PAGE_INSTRUCTIONS: Generate one page of text suitable for a slide "
             "or document page. Keep it concise (about 120–200 words) unless "
@@ -445,7 +457,7 @@ def generate_document(doc_id: int):
         try:
             page_text = call_gemini_text(page_prompt)
         except Exception as e:
-            print(f"[WARN] Gemini failed for page {i+1}: {e}")
+            print(f"[WARN] Gemini failed for page {i + 1}: {e}")
             page_text = fallback_page_text(i, pages, user_prompt)
 
         cur = conn.cursor()
@@ -457,7 +469,6 @@ def generate_document(doc_id: int):
             (doc_id, i, heading, page_text),
         )
         section_id = cur.lastrowid
-        # Save generation as a refinement record for traceability
         rid = str(uuid.uuid4())
         cur.execute(
             """
@@ -625,6 +636,7 @@ def section_feedback(section_id: int):
     return jsonify({"ok": True}), 200
 
 
+
 @app.route("/api/sections/<int:section_id>/comment", methods=["POST"])
 def section_comment(section_id: int):
     data = request.get_json(force=True) or {}
@@ -681,12 +693,7 @@ def export_document(doc_id: int):
     # DOCX
     if fmt == "docx":
         if not DOCX_AVAILABLE:
-            return (
-                jsonify(
-                    {"error": "DOCX export not available (python-docx missing)"}
-                ),
-                500,
-            )
+            return jsonify({"error": "DOCX export not available (python-docx missing)"}), 500
 
         from tempfile import NamedTemporaryFile
 
@@ -709,42 +716,30 @@ def export_document(doc_id: int):
     # PPTX
     if fmt == "pptx":
         if not PPTX_AVAILABLE:
-            return (
-                jsonify(
-                    {"error": "PPTX export not available (python-pptx missing)"}
-                ),
-                500,
-            )
+            return jsonify({"error": "PPTX export not available (python-pptx missing)"}), 500
 
         from tempfile import NamedTemporaryFile
-        from pptx import Presentation
         from pptx.util import Inches, Pt
         from pptx.dml.color import RGBColor
         import re
 
         prs = Presentation()
-        # Widescreen size
         prs.slide_width = Inches(13.33)
         prs.slide_height = Inches(7.5)
 
-        # ---- Title slide ----
-        title_layout = prs.slide_layouts[0]  # Title slide layout
+        # Title slide
+        title_layout = prs.slide_layouts[0]
         slide = prs.slides.add_slide(title_layout)
         slide.shapes.title.text = title
-
-        # Subtitle (if placeholder exists)
         if len(slide.placeholders) > 1:
             subtitle = slide.placeholders[1]
             subtitle.text = "Generated with AI Document Assistant"
-
-        # Style title
         for p in slide.shapes.title.text_frame.paragraphs:
             p.font.size = Pt(36)
             p.font.color.rgb = RGBColor(0, 70, 140)
 
-        # ---- Content slides: one per section ----
-        content_layout = prs.slide_layouts[1]  # Title + Content
-
+        # Content slides
+        content_layout = prs.slide_layouts[1]
         for idx, s in enumerate(sections):
             heading = s.get("heading") or f"Page {idx + 1}"
             text = (s.get("text") or "").strip()
@@ -753,19 +748,16 @@ def export_document(doc_id: int):
 
             slide = prs.slides.add_slide(content_layout)
 
-            # Slide title
             slide_title = slide.shapes.title
             slide_title.text = heading
             for p in slide_title.text_frame.paragraphs:
                 p.font.size = Pt(30)
                 p.font.color.rgb = RGBColor(0, 70, 140)
 
-            # Body as bullets
             body_shape = slide.placeholders[1]
             tf = body_shape.text_frame
-            tf.clear()  # remove default paragraph
+            tf.clear()
 
-            # Split long text into bullet-sized sentences
             chunks = re.split(r"(?<=[.!?])\s+", text)
             first = True
             for chunk in chunks:
@@ -784,7 +776,6 @@ def export_document(doc_id: int):
                 p.font.size = Pt(20)
                 p.font.color.rgb = RGBColor(40, 40, 40)
 
-        # ---- Save & return ----
         tmp = NamedTemporaryFile(delete=False, suffix=".pptx")
         prs.save(tmp.name)
         tmp.flush()
@@ -799,12 +790,7 @@ def export_document(doc_id: int):
     # PDF
     if fmt == "pdf":
         if not PDF_AVAILABLE:
-            return (
-                jsonify(
-                    {"error": "PDF export not available (reportlab missing)"}
-                ),
-                500,
-            )
+            return jsonify({"error": "PDF export not available (reportlab missing)"}), 500
 
         from tempfile import NamedTemporaryFile
 
@@ -886,6 +872,11 @@ def debug_gemini():
             }
         ), 500
 
+# =========================================
+# Ensure DB exists when imported by gunicorn (Render)
+# =========================================
+with app.app_context():
+    init_db()
 
 # =========================================
 # Main entry
@@ -901,5 +892,5 @@ if __name__ == "__main__":
         f"PDF_AVAILABLE={PDF_AVAILABLE})"
     )
 
-    # For Render you run via gunicorn, locally this is fine:
+    # On Render, debug=False is safer, but locally you can enable debug if you want.
     app.run(host="0.0.0.0", port=port)
