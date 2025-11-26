@@ -86,14 +86,15 @@ def db_conn() -> sqlite3.Connection:
     return conn
 
 
-def init_db() -> None:
+def init_db():
     conn = db_conn()
     cur = conn.cursor()
     cur.executescript(
         """
     CREATE TABLE IF NOT EXISTS documents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL,
+      title TEXT,
+      owner_email TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -110,7 +111,7 @@ def init_db() -> None:
 
     CREATE TABLE IF NOT EXISTS refinements (
       id TEXT PRIMARY KEY,
-      section_id INTEGER NOT NULL,
+      section_id INTEGER,
       prompt TEXT,
       revised_text TEXT,
       created_at TEXT DEFAULT (datetime('now')),
@@ -119,7 +120,7 @@ def init_db() -> None:
 
     CREATE TABLE IF NOT EXISTS comments (
       id TEXT PRIMARY KEY,
-      section_id INTEGER NOT NULL,
+      section_id INTEGER,
       comment TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY(section_id) REFERENCES sections(id)
@@ -127,7 +128,7 @@ def init_db() -> None:
 
     CREATE TABLE IF NOT EXISTS feedback (
       id TEXT PRIMARY KEY,
-      section_id INTEGER NOT NULL,
+      section_id INTEGER,
       liked INTEGER,
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY(section_id) REFERENCES sections(id)
@@ -173,7 +174,7 @@ def serialize_document(doc_id: int) -> Optional[Dict[str, Any]]:
 
 
 # =========================================
-# Gemini helpers (NEW, robust)
+# Gemini helpers
 # =========================================
 def _extract_gemini_text(resp: Any) -> Optional[str]:
     """
@@ -182,7 +183,7 @@ def _extract_gemini_text(resp: Any) -> Optional[str]:
     We intentionally do NOT rely only on resp.text, because in some SDK
     versions it raises when finish_reason != OK.
     """
-    # 1) Try the .text property, but ignore failures
+    # 1) Try the .text property
     try:
         t = getattr(resp, "text", None)
         if isinstance(t, str) and t.strip():
@@ -315,36 +316,83 @@ def health():
 
 
 # =========================================
-# Documents list / create
+# Documents list / create (per-user via owner_email)
 # =========================================
 @app.route("/api/documents", methods=["GET", "POST"])
-def documents_collection():
+def documents():
     conn = db_conn()
-    if request.method == "GET":
-        rows = conn.execute(
-            "SELECT id, title, created_at FROM documents ORDER BY datetime(created_at) DESC, id DESC"
-        ).fetchall()
-        conn.close()
-        return jsonify([dict(r) for r in rows]), 200
-
-    # POST create
-    data = request.get_json(force=True) or {}
-    title = (data.get("title") or "").strip() or f"Untitled {datetime.utcnow().isoformat()}"
     cur = conn.cursor()
-    cur.execute("INSERT INTO documents (title) VALUES (?)", (title,))
-    doc_id = cur.lastrowid
-    conn.commit()
-    row = conn.execute("SELECT id, title, created_at FROM documents WHERE id = ?", (doc_id,)).fetchone()
+
+    # CREATE NEW DOCUMENT
+    if request.method == "POST":
+        data = request.get_json(force=True)
+        title = data.get("title") or "Untitled"
+        owner_email = (data.get("owner_email") or "").strip()
+
+        cur.execute(
+            "INSERT INTO documents (title, owner_email) VALUES (?, ?)",
+            (title, owner_email),
+        )
+        doc_id = cur.lastrowid
+        conn.commit()
+
+        doc = cur.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+        conn.close()
+        return jsonify({**dict(doc), "sections": []}), 201
+
+    # LIST DOCUMENTS FOR LOGGED-IN USER
+    owner_email = request.args.get("owner_email", "").strip()
+    rows = cur.execute(
+        "SELECT * FROM documents WHERE owner_email = ? ORDER BY datetime(created_at) DESC, id DESC",
+        (owner_email,),
+    ).fetchall()
     conn.close()
-    return jsonify(dict(row)), 201
+    return jsonify([dict(r) for r in rows]), 200
 
 
 @app.route("/api/document/<int:doc_id>", methods=["GET"])
-def get_document(doc_id: int):
-    doc = serialize_document(doc_id)
+def get_document(doc_id):
+    # Email from query string, used to enforce simple access control
+    owner_email = request.args.get("owner_email", "").strip()
+
+    conn = db_conn()
+    doc = conn.execute(
+        "SELECT * FROM documents WHERE id = ?", (doc_id,)
+    ).fetchone()
     if not doc:
+        conn.close()
         return jsonify({"error": "document not found"}), 404
-    return jsonify(doc), 200
+
+    # If an owner_email is provided, document must belong to that email
+    if owner_email and (doc["owner_email"] or "") != owner_email:
+        conn.close()
+        # Pretend it doesn't exist for other users
+        return jsonify({"error": "document not found"}), 404
+
+    sections = conn.execute(
+        "SELECT * FROM sections WHERE document_id = ? ORDER BY position",
+        (doc_id,),
+    ).fetchall()
+
+    sections_out = []
+    for s in sections:
+        sdict = dict(s)
+        refinements = conn.execute(
+            "SELECT * FROM refinements WHERE section_id = ? ORDER BY created_at DESC",
+            (s["id"],),
+        ).fetchall()
+        comments = conn.execute(
+            "SELECT * FROM comments WHERE section_id = ? ORDER BY created_at",
+            (s["id"],),
+        ).fetchall()
+        sdict["refinements"] = [dict(r) for r in refinements]
+        sdict["comments"] = [dict(c) for c in comments]
+        sections_out.append(sdict)
+
+    out = dict(doc)
+    out["sections"] = sections_out
+    conn.close()
+    return jsonify(out), 200
 
 
 # =========================================
@@ -633,7 +681,12 @@ def export_document(doc_id: int):
     # DOCX
     if fmt == "docx":
         if not DOCX_AVAILABLE:
-            return jsonify({"error": "DOCX export not available (python-docx missing)"}), 500
+            return (
+                jsonify(
+                    {"error": "DOCX export not available (python-docx missing)"}
+                ),
+                500,
+            )
 
         from tempfile import NamedTemporaryFile
 
@@ -653,10 +706,15 @@ def export_document(doc_id: int):
             mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
 
-       # PPTX
+    # PPTX
     if fmt == "pptx":
         if not PPTX_AVAILABLE:
-            return jsonify({"error": "PPTX export not available (python-pptx missing)"}), 500
+            return (
+                jsonify(
+                    {"error": "PPTX export not available (python-pptx missing)"}
+                ),
+                500,
+            )
 
         from tempfile import NamedTemporaryFile
         from pptx import Presentation
@@ -665,7 +723,7 @@ def export_document(doc_id: int):
         import re
 
         prs = Presentation()
-        # Widescreen size (optional, looks good on most displays)
+        # Widescreen size
         prs.slide_width = Inches(13.33)
         prs.slide_height = Inches(7.5)
 
@@ -679,7 +737,7 @@ def export_document(doc_id: int):
             subtitle = slide.placeholders[1]
             subtitle.text = "Generated with AI Document Assistant"
 
-        # Style title a bit
+        # Style title
         for p in slide.shapes.title.text_frame.paragraphs:
             p.font.size = Pt(36)
             p.font.color.rgb = RGBColor(0, 70, 140)
@@ -738,11 +796,15 @@ def export_document(doc_id: int):
             mimetype="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         )
 
-
     # PDF
     if fmt == "pdf":
         if not PDF_AVAILABLE:
-            return jsonify({"error": "PDF export not available (reportlab missing)"}), 500
+            return (
+                jsonify(
+                    {"error": "PDF export not available (reportlab missing)"}
+                ),
+                500,
+            )
 
         from tempfile import NamedTemporaryFile
 
@@ -839,5 +901,5 @@ if __name__ == "__main__":
         f"PDF_AVAILABLE={PDF_AVAILABLE})"
     )
 
-    # 🚫 Never use debug=True in Render — it will crash gunicorn
+    # For Render you run via gunicorn, locally this is fine:
     app.run(host="0.0.0.0", port=port)

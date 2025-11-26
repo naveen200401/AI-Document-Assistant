@@ -1,8 +1,8 @@
 // frontend/app.js
 const { useState, useEffect } = React;
 
-// 🔧 IMPORTANT: put your Render backend URL here (no trailing slash)
-const API_BASE = "https://ai-document-assistant-5o3z.onrender.com/"; // e.g. "https://ai-docs-backend.onrender.com"
+// 🔧 IMPORTANT: Render backend URL (NO trailing slash)
+const API_BASE = "https://ai-document-assistant-5o3z.onrender.com";
 
 /* ---------------- LOCAL STORAGE HELPERS ---------------- */
 
@@ -31,7 +31,7 @@ function Login({ onLogin }) {
     if (!name.trim() || !email.trim() || !password.trim()) {
       return alert("Please enter name, email, and password");
     }
-    // No real backend auth – demo-only local user
+    // Demo-only local user (no real auth)
     const user = {
       id: "user-" + Math.random().toString(36).slice(2, 8),
       name,
@@ -98,12 +98,15 @@ function Dashboard({ user, onSelectDoc, onCreateDoc, onLogout }) {
   async function load() {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/documents`);
-      if (!res.ok) throw new Error("Failed to fetch");
+      const res = await fetch(
+        `${API_BASE}/api/documents?owner_email=${encodeURIComponent(
+          user.email
+        )}`
+      );
       const data = await res.json();
       setProjects(data);
     } catch (e) {
-      console.error("Load projects error:", e);
+      console.error(e);
       alert("Failed to load projects");
     }
     setLoading(false);
@@ -120,17 +123,16 @@ function Dashboard({ user, onSelectDoc, onCreateDoc, onLogout }) {
       const res = await fetch(`${API_BASE}/api/documents`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title }),
+        body: JSON.stringify({
+          title,
+          owner_email: user.email, // link document to this user
+        }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        console.error("Create project error:", data);
-        alert(data.error || "Failed to create project");
-        return;
-      }
-      onCreateDoc(data);
+      if (!res.ok) throw new Error("Create failed");
+      const doc = await res.json();
+      onCreateDoc(doc);
     } catch (e) {
-      console.error("Create project error:", e);
+      console.error(e);
       alert("Failed to create project");
     }
   }
@@ -597,11 +599,15 @@ function App() {
   }
 
   function handleSelectDoc(docMeta) {
-    fetch(`${API_BASE}/api/document/${docMeta.id}`)
+    fetch(
+      `${API_BASE}/api/document/${docMeta.id}?owner_email=${encodeURIComponent(
+        user.email
+      )}`
+    )
       .then((r) => r.json())
       .then((d) => setCurrentDoc(d))
       .catch((e) => {
-        console.error("Load document error:", e);
+        console.error(e);
         alert("Failed to load document");
       });
   }
