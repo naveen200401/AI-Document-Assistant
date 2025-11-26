@@ -408,7 +408,7 @@ See [LICENSE](LICENSE) file for details.
 
 - **Issues:** [GitHub Issues](https://github.com/naveen200401/ai-docs-platform/issues)
 - **Discussions:** [GitHub Discussions](https://github.com/naveen200401/ai-docs-platform/discussions)
-- **Email:** your-naveenchandu200401@gmail.com
+- **Email:** naveenchandu200401@gmail.com
 
 ---
 
