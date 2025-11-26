@@ -838,4 +838,6 @@ if __name__ == "__main__":
         f"PPTX_AVAILABLE={PPTX_AVAILABLE}, DOCX_AVAILABLE={DOCX_AVAILABLE}, "
         f"PDF_AVAILABLE={PDF_AVAILABLE})"
     )
-    app.run(host="0.0.0.0", port=port, debug=True)
+
+    # 🚫 Never use debug=True in Render — it will crash gunicorn
+    app.run(host="0.0.0.0", port=port)
