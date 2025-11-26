@@ -1,7 +1,7 @@
 // frontend/app.js
 const { useState, useEffect } = React;
 
-const API_BASE = "http://127.0.0.1:5001"; // backend Flask URL
+const API_BASE = "https://ai-document-assistant-ahek.onrender.com";
 
 function saveUser(user) {
   localStorage.setItem("ai_user", JSON.stringify(user));
