@@ -1,0 +1,197 @@
+# app/api/v1/projects.py
+import os
+from fastapi import APIRouter, HTTPException, Depends, status
+from pydantic import BaseModel
+from typing import List, Dict, Any, Optional
+from app.core import security
+import json
+import uuid
+from pathlib import Path
+from fastapi.responses import FileResponse
+
+router = APIRouter()
+
+# Paths (use absolute paths that match your repo)
+DATA_DIR = os.environ.get("BACKEND_DATA_DIR", "/Users/naveen/ai-docs-platform/backend/app/data")
+TMP_DIR = os.environ.get("BACKEND_TMP_DIR", "/Users/naveen/ai-docs-platform/backend/tmp")
+
+Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
+Path(TMP_DIR).mkdir(parents=True, exist_ok=True)
+
+PROJECTS_FILE = os.path.join(DATA_DIR, "projects.json")
+
+def _read_projects():
+    try:
+        with open(PROJECTS_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _write_projects(data):
+    with open(PROJECTS_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+class ProjectCreate(BaseModel):
+    name: str
+
+class ProjectOut(BaseModel):
+    id: str
+    name: str
+
+@router.get("", response_model=List[ProjectOut])
+def list_projects(current_user: Dict = Depends(security.get_current_user_from_token)):
+    data = _read_projects()
+    return [ {"id": k, "name": v["name"]} for k,v in data.items() ]
+
+@router.post("", response_model=ProjectOut)
+def create_project(payload: ProjectCreate, current_user: Dict = Depends(security.get_current_user_from_token)):
+    data = _read_projects()
+    pid = str(uuid.uuid4())
+    sections = [
+        {"id": str(uuid.uuid4()), "title": "Intro", "content": "Write your introduction here."}
+    ]
+    data[pid] = {"name": payload.name, "owner": current_user["user_id"], "sections": sections}
+    _write_projects(data)
+    return {"id": pid, "name": payload.name}
+
+@router.get("/{project_id}/sections")
+def get_sections(project_id: str, current_user: Dict = Depends(security.get_current_user_from_token)):
+    data = _read_projects()
+    project = data.get(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project.get("sections", [])
+
+# --- Gemini integration (optional) ---
+# We use google-genai SDK if GEMINI_API_KEY is set. Otherwise we fall back to the stub.
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+USE_GENAI_SDK = bool(GEMINI_KEY)
+
+try:
+    if USE_GENAI_SDK:
+        # install google-genai in venv to enable this import
+        from google import genai
+        genai_client = None
+        # Initialize client lazily
+        def _get_genai_client():
+            global genai_client
+            if genai_client:
+                return genai_client
+            # If you want to use Vertex AI, set vertexai=True and other env vars accordingly.
+            # For the Developer API, pass api_key or set GEMINI_API_KEY env var.
+            genai_client = genai.Client(api_key=GEMINI_KEY)
+            return genai_client
+except Exception:
+    # If google-genai not installed or fails, fallback to None
+    genai_client = None
+    USE_GENAI_SDK = False
+
+# GENERATE endpoint - uses Gemini if available, otherwise writes a stub docx/text file to TMP_DIR
+@router.post("/{project_id}/generate")
+def generate_project(project_id: str, payload: Dict = None, current_user: Dict = Depends(security.get_current_user_from_token)):
+    """
+    Generate a docx for the project.
+    If GEMINI_API_KEY is set and google-genai is installed, we will call Gemini and use its text.
+    Otherwise we create a simple stub docx using project sections.
+    Returns: {"status":"ok", "file_path": "/abs/path/to/file.docx"}
+    """
+    data = _read_projects()
+    project = data.get(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Compose a single prompt from the project (simple heuristic)
+    sections = project.get("sections", [])
+    composed_prompt = payload.get("prompt") if payload and payload.get("prompt") else None
+    if not composed_prompt:
+        # build a prompt summarizing each section
+        parts = []
+        for s in sections:
+            title = s.get("title", "")
+            content = s.get("content", "")
+            parts.append(f"### {title}\n{content}")
+        composed_prompt = "Create a one-page document based on the following sections:\n\n" + "\n\n".join(parts)
+
+    # output filename
+    fname = f"{project_id}-{int(uuid.uuid4().int>>64)}.docx"
+    out_path = os.path.join(TMP_DIR, fname)
+
+    # Try using Gemini via google-genai SDK if available
+    generated_text = None
+    if USE_GENAI_SDK:
+        try:
+            client = _get_genai_client()
+            # model choice: default to a flash model; you can change to gemini-2.5-flash or other model you have access to.
+            model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+            # The simple SDK call uses models.generate_content
+            resp = client.models.generate_content(model=model, contents=composed_prompt)
+            # Official SDK returns .text or .response depending on version; try both
+            generated_text = None
+            try:
+                generated_text = resp.text
+            except Exception:
+                try:
+                    generated_text = resp["text"]
+                except Exception:
+                    # As last resort, str(resp)
+                    generated_text = str(resp)
+        except Exception as e:
+            # If Gemini call fails, fallback to stub but include error note
+            generated_text = None
+            err_note = f"\n\n[LLM call failed: {type(e).__name__}: {e}]\nFalling back to local stub generation."
+    # If generated_text is still None, build a fallback using sections
+    if not generated_text:
+        # create a simple synthesized text from sections (fallback)
+        out_lines = [project.get("name","Untitled"), ""]
+        for s in sections:
+            out_lines.append(s.get("title",""))
+            out_lines.append(s.get("content",""))
+            out_lines.append("")
+        if 'err_note' in locals():
+            out_lines.append(err_note)
+        generated_text = "\n".join(out_lines)
+
+    # Write to a docx using python-docx if available, otherwise write plain text and rename to .docx
+    try:
+        from docx import Document
+        doc = Document()
+        doc.add_heading(project.get("name","Document"), level=1)
+        # Split generated_text into paragraphs
+        for para in generated_text.split("\n\n"):
+            doc.add_paragraph(para.strip())
+        doc.add_paragraph("\n\n---\nGenerated by backend generate endpoint.")
+        doc.save(out_path)
+    except Exception:
+        # fallback plain text
+        with open(out_path, "w") as f:
+            f.write(generated_text)
+
+    # Return stable metadata to frontend
+    return {"status": "ok", "file_path": out_path}
+
+# EXPORT endpoint - returns file stream if exists or generates one if missing
+@router.post("/{project_id}/export")
+def export_project(project_id: str, payload: Dict = None, current_user: Dict = Depends(security.get_current_user_from_token)):
+    fmt = (payload or {}).get("format", "docx")
+    # Try to find newest matching file in TMP_DIR for this project
+    files = [f for f in os.listdir(TMP_DIR) if f.startswith(project_id) and f.endswith(f".{fmt}")]
+    if not files:
+        # attempt to generate on the fly
+        gen_res = generate_project(project_id, payload or {}, current_user=current_user)
+        path = gen_res.get("file_path")
+        if not path or not os.path.exists(path):
+            raise HTTPException(status_code=500, detail="No export available")
+        return {"file_path": path}
+    # pick newest
+    files_full = sorted([os.path.join(TMP_DIR, f) for f in files], key=os.path.getmtime, reverse=True)
+    path = files_full[0]
+    # Stream the file to client
+    headers = {}
+    # choose content-type for docx/pptx
+    if fmt == "docx":
+        media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    elif fmt == "pptx":
+        media_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    else:
+        media_type = "application/octet-stream"
+    return FileResponse(path, media_type=media_type, filename=os.path.basename(path))
