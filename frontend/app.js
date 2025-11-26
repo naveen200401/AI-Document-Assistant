@@ -1,7 +1,10 @@
 // frontend/app.js
 const { useState, useEffect } = React;
 
-const API_BASE = "https://ai-document-assistant-ahek.onrender.com";
+// 🔧 IMPORTANT: put your Render backend URL here (no trailing slash)
+const API_BASE = "https://YOUR-BACKEND-ONRENDER-URL_HERE"; // e.g. "https://ai-docs-backend.onrender.com"
+
+/* ---------------- LOCAL STORAGE HELPERS ---------------- */
 
 function saveUser(user) {
   localStorage.setItem("ai_user", JSON.stringify(user));
@@ -13,55 +16,75 @@ function loadUser() {
     return null;
   }
 }
+function clearUser() {
+  localStorage.removeItem("ai_user");
+}
 
 /* ---------------- LOGIN ---------------- */
 
 function Login({ onLogin }) {
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
   function submit() {
-    if (!email.trim() || !password.trim()) {
-      return alert("Enter email and password");
+    if (!name.trim() || !email.trim() || !password.trim()) {
+      return alert("Please enter name, email, and password");
     }
-    // derive a simple display name from email prefix
-    const displayName = email.includes("@") ? email.split("@")[0] : email;
+    // No real backend auth – demo-only local user
     const user = {
       id: "user-" + Math.random().toString(36).slice(2, 8),
+      name,
       email,
-      name: displayName,
     };
     saveUser(user);
     onLogin(user);
   }
 
   return (
-    <div className="max-w-md mx-auto mt-24 bg-white rounded-xl shadow p-6">
-      <h2 className="text-2xl font-semibold mb-4 text-center">
-        AI Docs — Sign in
-      </h2>
-      <label className="block text-sm font-medium mb-1">Email</label>
-      <input
-        type="email"
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-        placeholder="you@example.com"
-        className="w-full p-2 border rounded mb-4"
-      />
-      <label className="block text-sm font-medium mb-1">Password</label>
-      <input
-        type="password"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        placeholder="••••••••"
-        className="w-full p-2 border rounded mb-4"
-      />
-      <button
-        className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700"
-        onClick={submit}
-      >
-        Sign in
-      </button>
+    <div className="min-h-screen flex items-center justify-center bg-gray-100">
+      <div className="w-full max-w-md bg-white rounded-xl shadow p-6">
+        <h1 className="text-2xl font-bold mb-2 text-center">
+          AI Document Assistant
+        </h1>
+        <p className="text-xs text-gray-500 mb-4 text-center">
+          Sign up / Sign in with a display name (stored locally for this demo)
+        </p>
+
+        <label className="block text-sm font-medium mb-1">Display name</label>
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Your name"
+          className="w-full p-2 border rounded mb-3 text-sm"
+        />
+
+        <label className="block text-sm font-medium mb-1">Email</label>
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="you@example.com"
+          className="w-full p-2 border rounded mb-3 text-sm"
+        />
+
+        <label className="block text-sm font-medium mb-1">Password</label>
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="••••••••"
+          className="w-full p-2 border rounded mb-4 text-sm"
+        />
+
+        <button
+          className="w-full bg-blue-600 text-white py-2 rounded text-sm hover:bg-blue-700"
+          onClick={submit}
+        >
+          Sign up / Sign in
+        </button>
+      </div>
     </div>
   );
 }
@@ -76,10 +99,11 @@ function Dashboard({ user, onSelectDoc, onCreateDoc, onLogout }) {
     setLoading(true);
     try {
       const res = await fetch(`${API_BASE}/api/documents`);
+      if (!res.ok) throw new Error("Failed to fetch");
       const data = await res.json();
       setProjects(data);
     } catch (e) {
-      console.error(e);
+      console.error("Load projects error:", e);
       alert("Failed to load projects");
     }
     setLoading(false);
@@ -98,11 +122,15 @@ function Dashboard({ user, onSelectDoc, onCreateDoc, onLogout }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title }),
       });
-      if (!res.ok) throw new Error("Create failed");
-      const doc = await res.json();
-      onCreateDoc(doc);
+      const data = await res.json();
+      if (!res.ok) {
+        console.error("Create project error:", data);
+        alert(data.error || "Failed to create project");
+        return;
+      }
+      onCreateDoc(data);
     } catch (e) {
-      console.error(e);
+      console.error("Create project error:", e);
       alert("Failed to create project");
     }
   }
@@ -113,24 +141,21 @@ function Dashboard({ user, onSelectDoc, onCreateDoc, onLogout }) {
         <div>
           <h1 className="text-3xl font-bold">AI Document Assistant</h1>
           <p className="text-sm text-gray-600">
-            Logged in as{" "}
-            <span className="font-semibold">
-              {user?.name || (user?.email ? user.email.split("@")[0] : "")}
-            </span>
+            Welcome, <span className="font-semibold">{user.name}</span>
           </p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex items-center gap-3">
           <button
             onClick={createNew}
-            className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+            className="bg-green-600 text-white px-4 py-2 rounded text-sm hover:bg-green-700"
           >
             + Create project
           </button>
           <button
             onClick={onLogout}
-            className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 text-sm"
+            className="border border-gray-400 text-gray-700 px-3 py-2 rounded text-xs hover:bg-gray-50"
           >
-            ⎋ Logout
+            Logout
           </button>
         </div>
       </div>
@@ -166,7 +191,7 @@ function Dashboard({ user, onSelectDoc, onCreateDoc, onLogout }) {
         <div className="bg-blue-50 rounded-xl border border-blue-100 p-4">
           <h2 className="text-lg font-semibold mb-2">How it works</h2>
           <ol className="list-decimal list-inside text-sm text-gray-700 space-y-1">
-            <li>Login with email & password.</li>
+            <li>Sign up / Sign in with a display name.</li>
             <li>Create a project and enter your prompt.</li>
             <li>Choose pages, theme, and format.</li>
             <li>Generate page-by-page using Gemini.</li>
@@ -204,13 +229,13 @@ function ProjectConfig({ doc, onUpdated }) {
       });
       const data = await res.json();
       if (!res.ok) {
-        console.error(data);
+        console.error("Generate error:", data);
         alert(data.error || "Generation failed");
       } else {
         onUpdated(data);
       }
     } catch (e) {
-      console.error(e);
+      console.error("Generate error:", e);
       alert("Generation failed");
     }
     setLoading(false);
@@ -270,27 +295,27 @@ function DownloadBar({ documentId }) {
       );
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        console.error(err);
+        console.error("Download error:", err);
         alert(err.error || `Failed to download ${format.toUpperCase()}`);
         return;
       }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url;
       const ext =
         format === "pptx"
           ? "pptx"
           : format === "pdf"
           ? "pdf"
           : "docx";
+      a.href = url;
       a.download = `document-${documentId}.${ext}`;
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
     } catch (e) {
-      console.error(e);
+      console.error("Download error:", e);
       alert("Download failed");
     }
   }
@@ -346,7 +371,7 @@ function SectionCard({ section, onUpdated }) {
       );
       const data = await res.json();
       if (!res.ok) {
-        console.error(data);
+        console.error("Refine error:", data);
         alert(data.error || "Refine failed");
       } else {
         onUpdated(section.id, {
@@ -356,7 +381,7 @@ function SectionCard({ section, onUpdated }) {
         setRefinePrompt("");
       }
     } catch (e) {
-      console.error(e);
+      console.error("Refine error:", e);
       alert("Refine failed");
     }
     setLoadingRefine(false);
@@ -381,7 +406,7 @@ function SectionCard({ section, onUpdated }) {
       );
       const data = await res.json();
       if (!res.ok) {
-        console.error(data);
+        console.error("Regenerate error:", data);
         alert(data.error || "Regenerate failed");
       } else {
         onUpdated(section.id, {
@@ -390,7 +415,7 @@ function SectionCard({ section, onUpdated }) {
         });
       }
     } catch (e) {
-      console.error(e);
+      console.error("Regenerate error:", e);
       alert("Regenerate failed");
     }
     setLoadingRegen(false);
@@ -405,7 +430,7 @@ function SectionCard({ section, onUpdated }) {
       });
       onUpdated(section.id, { last_feedback: liked ? 1 : 0 });
     } catch (e) {
-      console.error(e);
+      console.error("Feedback error:", e);
       alert("Feedback failed");
     }
   }
@@ -423,7 +448,7 @@ function SectionCard({ section, onUpdated }) {
       );
       const data = await res.json();
       if (!res.ok) {
-        console.error(data);
+        console.error("Comment error:", data);
         alert(data.error || "Comment failed");
       } else {
         const newComments = (section.comments || []).concat(data.comment);
@@ -431,7 +456,7 @@ function SectionCard({ section, onUpdated }) {
         setComment("");
       }
     } catch (e) {
-      console.error(e);
+      console.error("Comment error:", e);
       alert("Comment failed");
     }
   }
@@ -546,7 +571,6 @@ function DocumentView({ doc, onDocUpdated }) {
         <span className="text-xs text-gray-500">Document #{current.id}</span>
       </div>
 
-      {/* Download bar: PPTX, DOCX, PDF */}
       <DownloadBar documentId={current.id} />
 
       {(current.sections || []).map((sec) => (
@@ -567,18 +591,17 @@ function App() {
   }
 
   function handleLogout() {
-    localStorage.removeItem("ai_user");
+    clearUser();
     setUser(null);
     setCurrentDoc(null);
   }
 
   function handleSelectDoc(docMeta) {
-    // Load full document with sections
     fetch(`${API_BASE}/api/document/${docMeta.id}`)
       .then((r) => r.json())
       .then((d) => setCurrentDoc(d))
       .catch((e) => {
-        console.error(e);
+        console.error("Load document error:", e);
         alert("Failed to load document");
       });
   }
@@ -607,30 +630,21 @@ function App() {
       ) : (
         <>
           <div className="flex justify-between items-center mb-4">
-            <div>
-              <button
-                className="text-sm text-blue-600 hover:underline"
-                onClick={() => setCurrentDoc(null)}
-              >
-                ← Back to projects
-              </button>
-            </div>
-            <div className="flex items-center gap-4">
-              <span className="text-sm text-gray-700">
-                {user?.name ||
-                  (user?.email ? user.email.split("@")[0] : "User")}
-              </span>
-              <button
-                className="text-sm text-red-600 hover:underline"
-                onClick={handleLogout}
-              >
-                ⎋ Logout
-              </button>
-            </div>
+            <button
+              className="text-sm text-blue-600 hover:underline"
+              onClick={() => setCurrentDoc(null)}
+            >
+              ← Back to projects
+            </button>
+            <button
+              className="text-xs text-gray-600 underline"
+              onClick={handleLogout}
+            >
+              Logout
+            </button>
           </div>
 
           <ProjectConfig doc={currentDoc} onUpdated={handleDocUpdated} />
-
           <DocumentView doc={currentDoc} onDocUpdated={handleDocUpdated} />
         </>
       )}
