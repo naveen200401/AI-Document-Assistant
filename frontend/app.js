@@ -1,10 +1,10 @@
 // frontend/app.js
 const { useState, useEffect } = React;
 
-// 🔧 IMPORTANT: Render backend URL (NO trailing slash)
-const API_BASE = "https://ai-document-assistant-5o3z.onrender.com";
+// 🔧 IMPORTANT: your Render backend URL (NO trailing slash)
+const API_BASE = "https://ai-document-assistant-1-vidd.onrender.com";
 
-/* ---------------- LOCAL STORAGE HELPERS ---------------- */
+/* ---------------- LOCAL STORAGE HELPERS (optional remember) ---------------- */
 
 function saveUser(user) {
   localStorage.setItem("ai_user", JSON.stringify(user));
@@ -26,18 +26,24 @@ function Login({ onLogin }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [remember, setRemember] = useState(false);
 
   function submit() {
     if (!name.trim() || !email.trim() || !password.trim()) {
       return alert("Please enter name, email, and password");
     }
-    // Demo-only local user (no real auth)
     const user = {
       id: "user-" + Math.random().toString(36).slice(2, 8),
-      name,
-      email,
+      name: name.trim(),
+      email: email.trim(),
     };
-    saveUser(user);
+
+    if (remember) {
+      saveUser(user);
+    } else {
+      clearUser();
+    }
+
     onLogin(user);
   }
 
@@ -48,7 +54,8 @@ function Login({ onLogin }) {
           AI Document Assistant
         </h1>
         <p className="text-xs text-gray-500 mb-4 text-center">
-          Sign up / Sign in with a display name (stored locally for this demo)
+          Sign up / Sign in with a display name. This is a demo-only login
+          (stored in your browser).
         </p>
 
         <label className="block text-sm font-medium mb-1">Display name</label>
@@ -78,6 +85,15 @@ function Login({ onLogin }) {
           className="w-full p-2 border rounded mb-4 text-sm"
         />
 
+        <label className="flex items-center gap-2 text-xs text-gray-600 mb-4">
+          <input
+            type="checkbox"
+            checked={remember}
+            onChange={(e) => setRemember(e.target.checked)}
+          />
+          Remember me on this device
+        </label>
+
         <button
           className="w-full bg-blue-600 text-white py-2 rounded text-sm hover:bg-blue-700"
           onClick={submit}
@@ -103,6 +119,9 @@ function Dashboard({ user, onSelectDoc, onCreateDoc, onLogout }) {
           user.email
         )}`
       );
+      if (!res.ok) {
+        throw new Error("Failed to load");
+      }
       const data = await res.json();
       setProjects(data);
     } catch (e) {
@@ -125,7 +144,7 @@ function Dashboard({ user, onSelectDoc, onCreateDoc, onLogout }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title,
-          owner_email: user.email, // link document to this user
+          owner_email: user.email,
         }),
       });
       if (!res.ok) throw new Error("Create failed");
@@ -182,6 +201,7 @@ function Dashboard({ user, onSelectDoc, onCreateDoc, onLogout }) {
                   <div className="font-medium">{p.title}</div>
                   <div className="text-xs text-gray-500">
                     #{p.id} · {p.created_at}
+                    {p.theme ? ` · ${p.theme}` : ""}
                   </div>
                 </div>
                 <span className="text-xs text-blue-600">Open →</span>
@@ -206,20 +226,56 @@ function Dashboard({ user, onSelectDoc, onCreateDoc, onLogout }) {
   );
 }
 
-/* ---------------- PROJECT CONFIG (Generate) ---------------- */
+/* ---------------- THEME PRESETS ---------------- */
+
+const THEME_PRESETS = [
+  { id: "", label: "Custom (type below)" },
+  { id: "business", label: "Business" },
+  { id: "educational", label: "Educational" },
+  { id: "dark", label: "Dark / Minimal" },
+  { id: "neon", label: "Neon Tech" },
+];
+
+function themeToPrompt(themeId) {
+  switch (themeId) {
+    case "business":
+      return "formal, corporate, business presentation style";
+    case "educational":
+      return "educational, student-friendly, clear explanations";
+    case "dark":
+      return "modern dark theme, concise and professional";
+    case "neon":
+      return "futuristic, vibrant, neon tech style (but still readable)";
+    default:
+      return "";
+  }
+}
+
+/* ---------------- PROJECT CONFIG (Premium Generation UI) ---------------- */
 
 function ProjectConfig({ doc, onUpdated }) {
   const [prompt, setPrompt] = useState(doc.prompt || "");
   const [theme, setTheme] = useState(doc.theme || "");
+  const [themePreset, setThemePreset] = useState("");
   const [pages, setPages] = useState(doc.pages || 2);
   const [loading, setLoading] = useState(false);
+  const [genStatus, setGenStatus] = useState("");
+
+  function applyPreset(id) {
+    setThemePreset(id);
+    const t = themeToPrompt(id);
+    setTheme(t);
+  }
 
   async function handleGenerate() {
     if (!prompt.trim()) {
       return alert("Enter a prompt");
     }
     setLoading(true);
+    setGenStatus("Preparing request…");
+
     try {
+      setGenStatus("Calling Gemini and generating pages…");
       const res = await fetch(`${API_BASE}/api/documents/${doc.id}/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -229,17 +285,21 @@ function ProjectConfig({ doc, onUpdated }) {
           pages: Number(pages) || 1,
         }),
       });
+
       const data = await res.json();
       if (!res.ok) {
         console.error("Generate error:", data);
         alert(data.error || "Generation failed");
       } else {
+        setGenStatus("Finalizing document…");
         onUpdated(data);
       }
     } catch (e) {
       console.error("Generate error:", e);
       alert("Generation failed");
     }
+
+    setGenStatus("");
     setLoading(false);
   }
 
@@ -254,34 +314,67 @@ function ProjectConfig({ doc, onUpdated }) {
         onChange={(e) => setPrompt(e.target.value)}
         placeholder="Explain advantages of AI in education..."
       />
+
       <div className="grid md:grid-cols-3 gap-4 mb-3">
         <div>
-          <label className="text-sm font-medium block mb-1">Theme</label>
+          <label className="text-sm font-medium block mb-1">
+            Theme preset
+            <span className="text-xs text-gray-500 ml-1">(for exports too)</span>
+          </label>
+          <select
+            className="w-full border rounded p-2 text-sm"
+            value={themePreset}
+            onChange={(e) => applyPreset(e.target.value)}
+          >
+            {THEME_PRESETS.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="text-sm font-medium block mb-1">
+            Theme description
+          </label>
           <input
             className="w-full border rounded p-2 text-sm"
             value={theme}
             onChange={(e) => setTheme(e.target.value)}
             placeholder="educational / formal / business..."
           />
+          <p className="text-[11px] text-gray-500 mt-1">
+            This text is passed to Gemini and used when styling PPT exports.
+          </p>
         </div>
         <div>
           <label className="text-sm font-medium block mb-1">Pages</label>
           <input
             type="number"
             min={1}
-            max={20}
+            max={30}
             className="w-full border rounded p-2 text-sm"
             value={pages}
             onChange={(e) => setPages(e.target.value)}
           />
         </div>
       </div>
+
+      {genStatus && (
+        <div className="mb-2">
+          <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden mb-1">
+            <div className="bg-blue-500 h-2 animate-pulse w-3/4"></div>
+          </div>
+          <p className="text-xs text-gray-600">{genStatus}</p>
+        </div>
+      )}
+
       <button
         disabled={loading}
-        className="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700 disabled:opacity-60"
+        className="mt-2 bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700 disabled:opacity-60"
         onClick={handleGenerate}
       >
-        {loading ? "Generating..." : "Generate with Gemini"}
+        {loading ? "Generating…" : "Generate with Gemini"}
       </button>
     </div>
   );
@@ -305,11 +398,7 @@ function DownloadBar({ documentId }) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       const ext =
-        format === "pptx"
-          ? "pptx"
-          : format === "pdf"
-          ? "pdf"
-          : "docx";
+        format === "pptx" ? "pptx" : format === "pdf" ? "pdf" : "docx";
       a.href = url;
       a.download = `document-${documentId}.${ext}`;
       document.body.appendChild(a);
@@ -566,11 +655,18 @@ function DocumentView({ doc, onDocUpdated }) {
 
   if (!current) return null;
 
+  const pages = (current.sections || []).length;
+
   return (
     <div className="max-w-6xl mx-auto mt-6">
       <div className="flex justify-between items-center mb-3">
-        <h2 className="text-2xl font-bold">{current.title}</h2>
-        <span className="text-xs text-gray-500">Document #{current.id}</span>
+        <div>
+          <h2 className="text-2xl font-bold">{current.title}</h2>
+          <p className="text-xs text-gray-500">
+            Document #{current.id} · {pages} page{pages !== 1 ? "s" : ""}{" "}
+            {current.theme ? `· Theme: ${current.theme}` : ""}
+          </p>
+        </div>
       </div>
 
       <DownloadBar documentId={current.id} />
@@ -585,8 +681,17 @@ function DocumentView({ doc, onDocUpdated }) {
 /* ---------------- ROOT APP ---------------- */
 
 function App() {
-  const [user, setUser] = useState(loadUser());
+  // 👉 To always show login first for everyone, start with null user.
+  // If "remember me" was checked, we restore from localStorage.
+  const [user, setUser] = useState(null);
   const [currentDoc, setCurrentDoc] = useState(null);
+
+  useEffect(() => {
+    const remembered = loadUser();
+    if (remembered) {
+      setUser(remembered);
+    }
+  }, []);
 
   function handleLogin(u) {
     setUser(u);
