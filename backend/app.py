@@ -1,22 +1,12 @@
 """
 backend/app.py
 
-Flask backend for your AI Document Assistant.
+Flask backend for AI Document Assistant.
 
-Features
---------
-- Documents (projects) with sections (pages)
-- Page-by-page generation using Google Gemini (google-generativeai)
-- Per-section refinement, regeneration, feedback, comments
-- Export DOCX / PDF / PPTX (with simple themes)
-- Debug endpoint to test Gemini directly
-
-Environment
------------
-GEMINI_API_KEY : required for real Gemini calls
-GEMINI_MODEL   : optional, defaults to 'models/gemini-2.5-flash'
-PORT           : optional, backend port (default 5001)
-AI_DOCS_DB     : optional, sqlite file (default app.db)
+- Documents with per-user ownership (owner_email)
+- Sections (pages) with refine / regenerate / feedback / comments
+- Page-by-page generation via Gemini
+- Export: DOCX / PDF / PPTX
 """
 
 from __future__ import annotations
@@ -29,21 +19,16 @@ from typing import Optional, Dict, Any, List
 
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
+
+# -------------------------------------------------
+# Flask app + CORS
+# -------------------------------------------------
 app = Flask(__name__)
-app.config["CORS_HEADERS"] = "Content-Type"
+CORS(app)
 
-FRONTEND_URL = "https://ai-document-assistant-1-vidd.onrender.com"
-
-CORS(
-    app,
-    resources={r"/api/*": {"origins": FRONTEND_URL}},
-    supports_credentials=False,
-    allow_headers=["Content-Type", "Authorization"],
-    methods=["GET", "POST", "OPTIONS"],
-)
-
-
-# --------- Gemini SDK ---------
+# -------------------------------------------------
+# Gemini SDK
+# -------------------------------------------------
 GENAI_AVAILABLE = False
 genai = None
 try:
@@ -54,7 +39,9 @@ except Exception:
     genai = None
     GENAI_AVAILABLE = False
 
-# --------- Optional export libs ---------
+# -------------------------------------------------
+# Optional export libs
+# -------------------------------------------------
 PPTX_AVAILABLE = False
 DOCX_AVAILABLE = False
 PDF_AVAILABLE = False
@@ -81,28 +68,17 @@ try:
 except Exception:
     pass
 
-# --------- Config ---------
+# -------------------------------------------------
+# Config
+# -------------------------------------------------
 DB_PATH = os.environ.get("AI_DOCS_DB", "app.db")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "models/gemini-2.5-flash")
 
 
-app = Flask(__name__)
-
-# Allow your static frontend (onrender.com) to call the API
-CORS(
-    app,
-    resources={r"/api/*": {"origins": "*"}},
-    supports_credentials=False,
-    allow_headers=["Content-Type", "Authorization"],
-    methods=["GET", "POST", "OPTIONS"],
-)
-
-
-
-# =========================================
+# -------------------------------------------------
 # DB helpers
-# =========================================
+# -------------------------------------------------
 def db_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -110,69 +86,78 @@ def db_conn() -> sqlite3.Connection:
 
 
 def init_db():
+    """
+    Create tables if missing AND ensure 'owner_email' column exists.
+    This is important on Render where an older DB might not have it.
+    """
     conn = db_conn()
     cur = conn.cursor()
+
+    # Base tables
     cur.executescript(
         """
-    CREATE TABLE IF NOT EXISTS documents (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT,
-      owner_email TEXT,
-      theme TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
-    );
+        CREATE TABLE IF NOT EXISTS documents (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT,
+          owner_email TEXT,
+          created_at TEXT DEFAULT (datetime('now'))
+        );
 
-    CREATE TABLE IF NOT EXISTS sections (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      document_id INTEGER NOT NULL,
-      position INTEGER DEFAULT 0,
-      heading TEXT,
-      type TEXT DEFAULT 'text',
-      text TEXT,
-      last_feedback INTEGER,
-      FOREIGN KEY(document_id) REFERENCES documents(id)
-    );
+        CREATE TABLE IF NOT EXISTS sections (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          document_id INTEGER NOT NULL,
+          position INTEGER DEFAULT 0,
+          heading TEXT,
+          type TEXT DEFAULT 'text',
+          text TEXT,
+          last_feedback INTEGER,
+          FOREIGN KEY(document_id) REFERENCES documents(id)
+        );
 
-    CREATE TABLE IF NOT EXISTS refinements (
-      id TEXT PRIMARY KEY,
-      section_id INTEGER,
-      prompt TEXT,
-      revised_text TEXT,
-      created_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY(section_id) REFERENCES sections(id)
-    );
+        CREATE TABLE IF NOT EXISTS refinements (
+          id TEXT PRIMARY KEY,
+          section_id INTEGER,
+          prompt TEXT,
+          revised_text TEXT,
+          created_at TEXT DEFAULT (datetime('now')),
+          FOREIGN KEY(section_id) REFERENCES sections(id)
+        );
 
-    CREATE TABLE IF NOT EXISTS comments (
-      id TEXT PRIMARY KEY,
-      section_id INTEGER,
-      comment TEXT,
-      created_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY(section_id) REFERENCES sections(id)
-    );
+        CREATE TABLE IF NOT EXISTS comments (
+          id TEXT PRIMARY KEY,
+          section_id INTEGER,
+          comment TEXT,
+          created_at TEXT DEFAULT (datetime('now')),
+          FOREIGN KEY(section_id) REFERENCES sections(id)
+        );
 
-    CREATE TABLE IF NOT EXISTS feedback (
-      id TEXT PRIMARY KEY,
-      section_id INTEGER,
-      liked INTEGER,
-      created_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY(section_id) REFERENCES sections(id)
-    );
-    """
+        CREATE TABLE IF NOT EXISTS feedback (
+          id TEXT PRIMARY KEY,
+          section_id INTEGER,
+          liked INTEGER,
+          created_at TEXT DEFAULT (datetime('now')),
+          FOREIGN KEY(section_id) REFERENCES sections(id)
+        );
+        """
     )
 
-    # If database was created earlier without 'theme', try to add it
-    try:
-        cur.execute("ALTER TABLE documents ADD COLUMN theme TEXT")
-        conn.commit()
-    except Exception:
-        # Column probably already exists
-        pass
+    # Safety: if an OLD "documents" table exists without owner_email, add it.
+    cur.execute("PRAGMA table_info(documents)")
+    cols = [row[1] for row in cur.fetchall()]
+    if "owner_email" not in cols:
+        cur.execute("ALTER TABLE documents ADD COLUMN owner_email TEXT")
 
+    conn.commit()
     conn.close()
 
 
+# Make sure DB is ready on Render when gunicorn imports app
+with app.app_context():
+    init_db()
+
+
 def serialize_document(doc_id: int) -> Optional[Dict[str, Any]]:
-    """Return a document + sections + refinements + comments as dict."""
+    """Return a document + sections + refinements + comments."""
     conn = db_conn()
     doc = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
     if not doc:
@@ -205,27 +190,26 @@ def serialize_document(doc_id: int) -> Optional[Dict[str, Any]]:
     return out
 
 
-# =========================================
+# -------------------------------------------------
 # Gemini helpers
-# =========================================
+# -------------------------------------------------
 def _extract_gemini_text(resp: Any) -> Optional[str]:
-    """
-    Safely extract plain text from a google-generativeai response object.
-    We avoid relying only on resp.text, which can raise if finish_reason != OK.
-    """
+    """Safely extract text from a google-generativeai response."""
+    # 1) Quick accessor
     try:
         t = getattr(resp, "text", None)
         if isinstance(t, str) and t.strip():
             return t.strip()
     except Exception as e:
-        print("resp.text accessor failed:", e)
+        print("resp.text failed:", e)
 
+    # 2) candidates[0].content.parts[*].text
     try:
         candidates = getattr(resp, "candidates", None) or []
         if candidates:
             first = candidates[0]
             finish_reason = getattr(first, "finish_reason", None)
-            print("Gemini candidate finish_reason:", finish_reason)
+            print("Gemini finish_reason:", finish_reason)
 
             content = getattr(first, "content", None)
             parts = getattr(content, "parts", None) if content is not None else None
@@ -240,6 +224,7 @@ def _extract_gemini_text(resp: Any) -> Optional[str]:
     except Exception as e:
         print("candidate.parts extraction failed:", e)
 
+    # 3) fallback to string
     try:
         s = str(resp)
         if s.strip():
@@ -257,7 +242,6 @@ def call_gemini_text(prompt: str, model_name: Optional[str] = None) -> str:
         raise RuntimeError("GEMINI_API_KEY environment variable not set.")
 
     genai.configure(api_key=GEMINI_API_KEY)
-
     model_id = model_name or GEMINI_MODEL
     model = genai.GenerativeModel(model_id)
     resp = model.generate_content(prompt)
@@ -278,7 +262,9 @@ def call_gemini_text(prompt: str, model_name: Optional[str] = None) -> str:
     return text.strip()
 
 
-# --------- Local fallbacks (when Gemini fails) ---------
+# -------------------------------------------------
+# Local fallbacks
+# -------------------------------------------------
 def fallback_page_text(page_index: int, total_pages: int, user_prompt: str) -> str:
     idx = page_index + 1
     return (
@@ -293,6 +279,7 @@ def fallback_refinement_text(base_text: str, prompt: str) -> str:
     p = (prompt or "").lower()
     if not base_text:
         return "[no content]"
+
     if "shorten" in p:
         import re
 
@@ -304,20 +291,23 @@ def fallback_refinement_text(base_text: str, prompt: str) -> str:
         words = base_text.split()
         n = max(1, len(words) // 2)
         return " ".join(words[:n]) + ("…" if len(words) > n else "")
+
     if "bullet" in p or "bullets" in p:
         import re
 
         sentences = re.split(r"(?<=[.!?])\s+", base_text.strip())
         bullets = "\n".join("- " + s.strip() for s in sentences if s.strip())
         return bullets
+
     if "formal" in p:
         return "In a more formal tone: " + base_text
+
     return base_text + f"\n\n[Refined locally with prompt: {prompt}]"
 
 
-# =========================================
+# -------------------------------------------------
 # Basic routes
-# =========================================
+# -------------------------------------------------
 @app.route("/")
 def root():
     return jsonify(
@@ -337,16 +327,16 @@ def health():
     return jsonify({"status": "ok"})
 
 
-# =========================================
-# Documents list / create
-# =========================================
+# -------------------------------------------------
+# Documents list / create (per-user)
+# -------------------------------------------------
 @app.route("/api/documents", methods=["GET", "POST"])
 def documents():
     conn = db_conn()
     cur = conn.cursor()
 
     if request.method == "POST":
-        data = request.get_json(force=True)
+        data = request.get_json(force=True) or {}
         title = data.get("title") or "Untitled"
         owner_email = (data.get("owner_email") or "").strip()
 
@@ -361,34 +351,43 @@ def documents():
         conn.close()
         return jsonify({**dict(doc), "sections": []}), 201
 
-    owner_email = request.args.get("owner_email", "").strip()
-    rows = cur.execute(
-        "SELECT * FROM documents WHERE owner_email = ? "
-        "ORDER BY datetime(created_at) DESC, id DESC",
-        (owner_email,),
-    ).fetchall()
+    # GET – list only this user's documents
+    owner_email = (request.args.get("owner_email") or "").strip()
+
+    if owner_email:
+        rows = cur.execute(
+            """
+            SELECT * FROM documents
+            WHERE owner_email = ?
+            ORDER BY datetime(created_at) DESC, id DESC
+            """,
+            (owner_email,),
+        ).fetchall()
+    else:
+        # if for some reason email missing, just return empty list
+        rows = []
+
     conn.close()
     return jsonify([dict(r) for r in rows]), 200
 
 
 @app.route("/api/document/<int:doc_id>", methods=["GET"])
-def get_document(doc_id):
-    owner_email = request.args.get("owner_email", "").strip()
+def get_document(doc_id: int):
+    owner_email = (request.args.get("owner_email") or "").strip()
 
     conn = db_conn()
-    doc = conn.execute(
-        "SELECT * FROM documents WHERE id = ?", (doc_id,)
-    ).fetchone()
+    doc = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
     if not doc:
         conn.close()
         return jsonify({"error": "document not found"}), 404
 
+    # Simple access control: document must belong to this email
     if owner_email and (doc["owner_email"] or "") != owner_email:
         conn.close()
         return jsonify({"error": "document not found"}), 404
 
     sections = conn.execute(
-        "SELECT * FROM sections WHERE document_id = ? ORDER BY position",
+        "SELECT * FROM sections WHERE document_id = ? ORDER BY position, id",
         (doc_id,),
     ).fetchall()
 
@@ -413,9 +412,9 @@ def get_document(doc_id):
     return jsonify(out), 200
 
 
-# =========================================
-# Generate pages for a document
-# =========================================
+# -------------------------------------------------
+# Generate pages
+# -------------------------------------------------
 @app.route("/api/documents/<int:doc_id>/generate", methods=["POST"])
 def generate_document(doc_id: int):
     data = request.get_json(force=True) or {}
@@ -433,25 +432,22 @@ def generate_document(doc_id: int):
         conn.close()
         return jsonify({"error": "document not found"}), 404
 
-    # Save theme on the document for later (export)
-    conn.execute("UPDATE documents SET theme = ? WHERE id = ?", (theme, doc_id))
-    conn.commit()
-
-    # Delete old sections + related rows
+    # Clear existing sections + child tables
     sec_rows = conn.execute(
         "SELECT id FROM sections WHERE document_id = ?", (doc_id,)
     ).fetchall()
     sec_ids = [r["id"] for r in sec_rows]
     if sec_ids:
-        q_marks = ",".join("?" for _ in sec_ids)
-        conn.execute(f"DELETE FROM refinements WHERE section_id IN ({q_marks})", sec_ids)
-        conn.execute(f"DELETE FROM comments    WHERE section_id IN ({q_marks})", sec_ids)
-        conn.execute(f"DELETE FROM feedback    WHERE section_id IN ({q_marks})", sec_ids)
+        q = ",".join("?" for _ in sec_ids)
+        conn.execute(f"DELETE FROM refinements WHERE section_id IN ({q})", sec_ids)
+        conn.execute(f"DELETE FROM comments    WHERE section_id IN ({q})", sec_ids)
+        conn.execute(f"DELETE FROM feedback    WHERE section_id IN ({q})", sec_ids)
         conn.execute("DELETE FROM sections WHERE document_id = ?", (doc_id,))
         conn.commit()
 
+    # Generate each page
     for i in range(pages):
-        heading = f"Page {i+1}"
+        heading = f"Page {i + 1}"
         page_prompt = (
             "You are a document author. Generate the content for page "
             f"{i+1} of {pages} for the user prompt.\n\n"
@@ -478,6 +474,7 @@ def generate_document(doc_id: int):
             (doc_id, i, heading, page_text),
         )
         section_id = cur.lastrowid
+
         rid = str(uuid.uuid4())
         cur.execute(
             """
@@ -499,9 +496,9 @@ def generate_document(doc_id: int):
     return jsonify(doc_out), 200
 
 
-# =========================================
+# -------------------------------------------------
 # Section refine / regenerate / feedback / comment
-# =========================================
+# -------------------------------------------------
 @app.route("/api/sections/<int:section_id>/refine", methods=["POST"])
 def refine_section(section_id: int):
     data = request.get_json(force=True) or {}
@@ -517,7 +514,7 @@ def refine_section(section_id: int):
         conn.close()
         return jsonify({"error": "section not found"}), 404
 
-    base_text = current_text if current_text is not None else sec["text"] or ""
+    base_text = current_text if current_text is not None else (sec["text"] or "")
     full_prompt = (
         "You are an expert document editor. Apply the user's refinement instruction "
         "ONLY to the provided section text.\n\n"
@@ -529,7 +526,7 @@ def refine_section(section_id: int):
     try:
         revised_text = call_gemini_text(full_prompt)
     except Exception as e:
-        print("Gemini refine failed, using local fallback:", e)
+        print("Gemini refine failed, using fallback:", e)
         revised_text = fallback_refinement_text(base_text, prompt)
 
     rid = str(uuid.uuid4())
@@ -549,14 +546,11 @@ def refine_section(section_id: int):
         (section_id,),
     ).fetchall()
     conn.close()
-    return (
-        jsonify(
-            {
-                "revised_text": revised_text,
-                "refinements": [dict(r) for r in refinements],
-            }
-        ),
-        200,
+    return jsonify(
+        {
+            "revised_text": revised_text,
+            "refinements": [dict(r) for r in refinements],
+        }
     )
 
 
@@ -605,15 +599,12 @@ def regenerate_section(section_id: int):
         (section_id,),
     ).fetchall()
     conn.close()
-    return (
-        jsonify(
-            {
-                "id": section_id,
-                "text": new_text,
-                "refinements": [dict(r) for r in refinements],
-            }
-        ),
-        200,
+    return jsonify(
+        {
+            "id": section_id,
+            "text": new_text,
+            "refinements": [dict(r) for r in refinements],
+        }
     )
 
 
@@ -642,7 +633,7 @@ def section_feedback(section_id: int):
     )
     conn.commit()
     conn.close()
-    return jsonify({"ok": True}), 200
+    return jsonify({"ok": True})
 
 
 @app.route("/api/sections/<int:section_id>/comment", methods=["POST"])
@@ -675,21 +666,17 @@ def section_comment(section_id: int):
         "created_at": created_at,
     }
     conn.close()
-    return jsonify({"comment": new_comment}), 200
+    return jsonify({"comment": new_comment})
 
 
-# =========================================
-# Export DOCX / PDF / PPTX
-# =========================================
+# -------------------------------------------------
+# Export DOCX / PPTX / PDF
+# -------------------------------------------------
 def _safe_filename(title: str, ext: str) -> str:
     base = "".join(c for c in title if c.isalnum() or c in (" ", "_", "-")).strip()
     if not base:
         base = "document"
     return f"{base}.{ext}"
-
-
-def _theme_from_doc(doc: Dict[str, Any]) -> str:
-    return (doc.get("theme") or "").lower()
 
 
 @app.route("/api/documents/<int:doc_id>/export", methods=["GET"])
@@ -701,17 +688,13 @@ def export_document(doc_id: int):
 
     title = doc.get("title") or f"Document_{doc_id}"
     sections = doc.get("sections") or []
-    theme = _theme_from_doc(doc)
 
     # DOCX
     if fmt == "docx":
         if not DOCX_AVAILABLE:
-            return (
-                jsonify(
-                    {"error": "DOCX export not available (python-docx missing)"}
-                ),
-                500,
-            )
+            return jsonify(
+                {"error": "DOCX export not available (python-docx missing)"}
+            ), 500
 
         from tempfile import NamedTemporaryFile
 
@@ -728,24 +711,17 @@ def export_document(doc_id: int):
             tmp.name,
             as_attachment=True,
             download_name=filename,
-            mimetype=(
-                "application/vnd.openxmlformats-officedocument."
-                "wordprocessingml.document"
-            ),
+            mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
 
     # PPTX
     if fmt == "pptx":
         if not PPTX_AVAILABLE:
-            return (
-                jsonify(
-                    {"error": "PPTX export not available (python-pptx missing)"}
-                ),
-                500,
-            )
+            return jsonify(
+                {"error": "PPTX export not available (python-pptx missing)"}
+            ), 500
 
         from tempfile import NamedTemporaryFile
-        from pptx import Presentation
         from pptx.util import Inches, Pt
         from pptx.dml.color import RGBColor
         import re
@@ -754,50 +730,18 @@ def export_document(doc_id: int):
         prs.slide_width = Inches(13.33)
         prs.slide_height = Inches(7.5)
 
-        # Theme colors
-        if "neon" in theme:
-            bg_color = RGBColor(10, 10, 30)
-            title_color = RGBColor(0, 255, 200)
-            body_color = RGBColor(230, 230, 255)
-        elif "dark" in theme:
-            bg_color = RGBColor(15, 15, 15)
-            title_color = RGBColor(240, 240, 240)
-            body_color = RGBColor(210, 210, 210)
-        elif "educat" in theme:
-            bg_color = RGBColor(245, 249, 255)
-            title_color = RGBColor(25, 80, 160)
-            body_color = RGBColor(40, 40, 40)
-        elif "business" in theme or "formal" in theme:
-            bg_color = RGBColor(255, 255, 255)
-            title_color = RGBColor(15, 60, 120)
-            body_color = RGBColor(30, 30, 30)
-        else:
-            bg_color = RGBColor(255, 255, 255)
-            title_color = RGBColor(0, 70, 140)
-            body_color = RGBColor(40, 40, 40)
-
-        def set_slide_bg(slide):
-            fill = slide.background.fill
-            fill.solid()
-            fill.fore_color.rgb = bg_color
-
         # Title slide
         title_layout = prs.slide_layouts[0]
         slide = prs.slides.add_slide(title_layout)
-        set_slide_bg(slide)
         slide.shapes.title.text = title
-
         if len(slide.placeholders) > 1:
-            subtitle = slide.placeholders[1]
-            subtitle.text = "Generated with AI Document Assistant"
-
+            slide.placeholders[1].text = "Generated with AI Document Assistant"
         for p in slide.shapes.title.text_frame.paragraphs:
             p.font.size = Pt(36)
-            p.font.color.rgb = title_color
+            p.font.color.rgb = RGBColor(0, 70, 140)
 
         # Content slides
         content_layout = prs.slide_layouts[1]
-
         for idx, s in enumerate(sections):
             heading = s.get("heading") or f"Page {idx + 1}"
             text = (s.get("text") or "").strip()
@@ -805,13 +749,12 @@ def export_document(doc_id: int):
                 continue
 
             slide = prs.slides.add_slide(content_layout)
-            set_slide_bg(slide)
 
             slide_title = slide.shapes.title
             slide_title.text = heading
             for p in slide_title.text_frame.paragraphs:
                 p.font.size = Pt(30)
-                p.font.color.rgb = title_color
+                p.font.color.rgb = RGBColor(0, 70, 140)
 
             body_shape = slide.placeholders[1]
             tf = body_shape.text_frame
@@ -829,11 +772,10 @@ def export_document(doc_id: int):
                     first = False
                 else:
                     p = tf.add_paragraph()
-
                 p.text = chunk
                 p.level = 0
                 p.font.size = Pt(20)
-                p.font.color.rgb = body_color
+                p.font.color.rgb = RGBColor(40, 40, 40)
 
         tmp = NamedTemporaryFile(delete=False, suffix=".pptx")
         prs.save(tmp.name)
@@ -843,21 +785,15 @@ def export_document(doc_id: int):
             tmp.name,
             as_attachment=True,
             download_name=filename,
-            mimetype=(
-                "application/vnd.openxmlformats-officedocument."
-                "presentationml.presentation"
-            ),
+            mimetype="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         )
 
     # PDF
     if fmt == "pdf":
         if not PDF_AVAILABLE:
-            return (
-                jsonify(
-                    {"error": "PDF export not available (reportlab missing)"}
-                ),
-                500,
-            )
+            return jsonify(
+                {"error": "PDF export not available (reportlab missing)"}
+            ), 500
 
         from tempfile import NamedTemporaryFile
 
@@ -905,9 +841,9 @@ def export_document(doc_id: int):
     return jsonify({"error": f"unknown format '{fmt}'"}), 400
 
 
-# =========================================
+# -------------------------------------------------
 # Debug Gemini
-# =========================================
+# -------------------------------------------------
 @app.route("/api/debug_gemini", methods=["POST"])
 def debug_gemini():
     data = request.get_json(force=True) or {}
@@ -922,33 +858,14 @@ def debug_gemini():
 
     try:
         text = call_gemini_text(prompt, model_name=model)
-        return jsonify(
-            {
-                "prompt": prompt,
-                "model": model,
-                "text": text,
-            }
-        )
+        return jsonify({"prompt": prompt, "model": model, "text": text})
     except Exception as e:
-        return (
-            jsonify(
-                {
-                    "error": "Gemini generation failed",
-                    "details": {"message": str(e)},
-                }
-            ),
-            500,
-        )
+        return jsonify({"error": "Gemini generation failed", "details": {"message": str(e)}}), 500
 
 
-# =========================================
-# Main entry
-# =========================================
-
-# ✅ Ensure DB tables exist even when running under gunicorn on Render
-# (this runs once per worker process; CREATE TABLE IF NOT EXISTS is safe)
-init_db()
-
+# -------------------------------------------------
+# Main entry (local dev)
+# -------------------------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5001"))
     print(
@@ -957,6 +874,4 @@ if __name__ == "__main__":
         f"PPTX_AVAILABLE={PPTX_AVAILABLE}, DOCX_AVAILABLE={DOCX_AVAILABLE}, "
         f"PDF_AVAILABLE={PDF_AVAILABLE})"
     )
-
-    # Local dev only; Render uses gunicorn
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=True)

@@ -1,7 +1,7 @@
 // frontend/app.js
 const { useState, useEffect } = React;
 
-// 🔧 IMPORTANT: backend Flask URL (NO trailing slash)
+// 🔧 BACKEND URL (NO trailing slash)
 const API_BASE = "https://ai-document-assistant-5o3z.onrender.com";
 
 /* ---------------- LOCAL STORAGE HELPERS ---------------- */
@@ -37,13 +37,8 @@ function Login({ onLogin }) {
       name: name.trim(),
       email: email.trim(),
     };
-
-    if (remember) {
-      saveUser(user);
-    } else {
-      clearUser();
-    }
-
+    if (remember) saveUser(user);
+    else clearUser();
     onLogin(user);
   }
 
@@ -54,8 +49,7 @@ function Login({ onLogin }) {
           AI Document Assistant
         </h1>
         <p className="text-xs text-gray-500 mb-4 text-center">
-          Sign up / Sign in with a display name. This is a demo-only login
-          (stored in your browser).
+          Demo login only – stored in your browser.
         </p>
 
         <label className="block text-sm font-medium mb-1">Display name</label>
@@ -120,6 +114,8 @@ function Dashboard({ user, onSelectDoc, onCreateDoc, onLogout }) {
         )}`
       );
       if (!res.ok) {
+        const txt = await res.text();
+        console.error("List documents failed:", res.status, txt);
         throw new Error("Failed to load");
       }
       const data = await res.json();
@@ -147,7 +143,11 @@ function Dashboard({ user, onSelectDoc, onCreateDoc, onLogout }) {
           owner_email: user.email,
         }),
       });
-      if (!res.ok) throw new Error("Create failed");
+      if (!res.ok) {
+        const txt = await res.text();
+        console.error("Create document failed:", res.status, txt);
+        throw new Error("Create failed");
+      }
       const doc = await res.json();
       onCreateDoc(doc);
     } catch (e) {
@@ -201,7 +201,6 @@ function Dashboard({ user, onSelectDoc, onCreateDoc, onLogout }) {
                   <div className="font-medium">{p.title}</div>
                   <div className="text-xs text-gray-500">
                     #{p.id} · {p.created_at}
-                    {p.theme ? ` · ${p.theme}` : ""}
                   </div>
                 </div>
                 <span className="text-xs text-blue-600">Open →</span>
@@ -226,7 +225,7 @@ function Dashboard({ user, onSelectDoc, onCreateDoc, onLogout }) {
   );
 }
 
-/* ---------------- THEME PRESETS ---------------- */
+/* ---------------- THEME PRESETS & CONFIG ---------------- */
 
 const THEME_PRESETS = [
   { id: "", label: "Custom (type below)" },
@@ -251,8 +250,6 @@ function themeToPrompt(themeId) {
   }
 }
 
-/* ---------------- PROJECT CONFIG (Premium Generation UI) ---------------- */
-
 function ProjectConfig({ doc, onUpdated }) {
   const [prompt, setPrompt] = useState(doc.prompt || "");
   const [theme, setTheme] = useState(doc.theme || "");
@@ -273,7 +270,6 @@ function ProjectConfig({ doc, onUpdated }) {
     }
     setLoading(true);
     setGenStatus("Preparing request…");
-
     try {
       setGenStatus("Calling Gemini and generating pages…");
       const res = await fetch(`${API_BASE}/api/documents/${doc.id}/generate`, {
@@ -285,7 +281,6 @@ function ProjectConfig({ doc, onUpdated }) {
           pages: Number(pages) || 1,
         }),
       });
-
       const data = await res.json();
       if (!res.ok) {
         console.error("Generate error:", data);
@@ -298,7 +293,6 @@ function ProjectConfig({ doc, onUpdated }) {
       console.error("Generate error:", e);
       alert("Generation failed");
     }
-
     setGenStatus("");
     setLoading(false);
   }
@@ -318,7 +312,7 @@ function ProjectConfig({ doc, onUpdated }) {
       <div className="grid md:grid-cols-3 gap-4 mb-3">
         <div>
           <label className="text-sm font-medium block mb-1">
-            Theme preset
+            Theme preset{" "}
             <span className="text-xs text-gray-500 ml-1">(for exports too)</span>
           </label>
           <select
@@ -344,7 +338,7 @@ function ProjectConfig({ doc, onUpdated }) {
             placeholder="educational / formal / business..."
           />
           <p className="text-[11px] text-gray-500 mt-1">
-            This text is passed to Gemini and used when styling PPT exports.
+            Passed to Gemini and used when styling PPT exports.
           </p>
         </div>
         <div>
@@ -380,7 +374,7 @@ function ProjectConfig({ doc, onUpdated }) {
   );
 }
 
-/* ---------------- DOWNLOAD BAR (DOCX/PDF/PPTX) ---------------- */
+/* ---------------- DOWNLOAD BAR ---------------- */
 
 function DownloadBar({ documentId }) {
   async function download(format) {
@@ -654,7 +648,6 @@ function DocumentView({ doc, onDocUpdated }) {
   }
 
   if (!current) return null;
-
   const pages = (current.sections || []).length;
 
   return (
@@ -663,8 +656,7 @@ function DocumentView({ doc, onDocUpdated }) {
         <div>
           <h2 className="text-2xl font-bold">{current.title}</h2>
           <p className="text-xs text-gray-500">
-            Document #{current.id} · {pages} page{pages !== 1 ? "s" : ""}{" "}
-            {current.theme ? `· Theme: ${current.theme}` : ""}
+            Document #{current.id} · {pages} page{pages !== 1 ? "s" : ""}
           </p>
         </div>
       </div>
