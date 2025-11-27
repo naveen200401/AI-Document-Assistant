@@ -2,7 +2,7 @@
 const { useState, useEffect } = React;
 
 // 🔧 IMPORTANT: your Render backend URL (NO trailing slash)
-const API_BASE = "https://ai-document-assistant-1-vidd.onrender.com";
+const API_BASE = "https://ai-document-assistant-5o3z.onrender.com/";
 
 /* ---------------- LOCAL STORAGE HELPERS (optional remember) ---------------- */
 
