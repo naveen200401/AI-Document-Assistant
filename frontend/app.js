@@ -1,10 +1,10 @@
+// frontend/app.js
 const { useState, useEffect } = React;
 
 // 🔧 IMPORTANT: backend Flask URL (NO trailing slash)
-const API_BASE = "https://ai-document-assistant-ahek.onrender.com";
+const API_BASE = "https://ai-document-assistant-5o3z.onrender.com";
 
-
-/* ---------------- LOCAL STORAGE HELPERS (optional remember) ---------------- */
+/* ---------------- LOCAL STORAGE HELPERS ---------------- */
 
 function saveUser(user) {
   localStorage.setItem("ai_user", JSON.stringify(user));
@@ -435,7 +435,7 @@ function DownloadBar({ documentId }) {
   );
 }
 
-/* ---------------- SECTION CARD (Refine + Regenerate + Feedback + Comments) ---------------- */
+/* ---------------- SECTION CARD ---------------- */
 
 function SectionCard({ section, onUpdated }) {
   const [refinePrompt, setRefinePrompt] = useState("");
@@ -681,8 +681,6 @@ function DocumentView({ doc, onDocUpdated }) {
 /* ---------------- ROOT APP ---------------- */
 
 function App() {
-  // 👉 To always show login first for everyone, start with null user.
-  // If "remember me" was checked, we restore from localStorage.
   const [user, setUser] = useState(null);
   const [currentDoc, setCurrentDoc] = useState(null);
 
