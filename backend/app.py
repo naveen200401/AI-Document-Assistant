@@ -73,8 +73,18 @@ DB_PATH = os.environ.get("AI_DOCS_DB", "app.db")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "models/gemini-2.5-flash")
 
+
 app = Flask(__name__)
-CORS(app)
+
+# Allow your static frontend (onrender.com) to call the API
+CORS(
+    app,
+    resources={r"/api/*": {"origins": "*"}},
+    supports_credentials=False,
+    allow_headers=["Content-Type", "Authorization"],
+    methods=["GET", "POST", "OPTIONS"],
+)
+
 
 
 # =========================================
