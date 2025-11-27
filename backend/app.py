@@ -29,6 +29,19 @@ from typing import Optional, Dict, Any, List
 
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
+app = Flask(__name__)
+app.config["CORS_HEADERS"] = "Content-Type"
+
+FRONTEND_URL = "https://ai-document-assistant-1-vidd.onrender.com"
+
+CORS(
+    app,
+    resources={r"/api/*": {"origins": FRONTEND_URL}},
+    supports_credentials=False,
+    allow_headers=["Content-Type", "Authorization"],
+    methods=["GET", "POST", "OPTIONS"],
+)
+
 
 # --------- Gemini SDK ---------
 GENAI_AVAILABLE = False
@@ -932,6 +945,8 @@ def debug_gemini():
 # Main entry
 # =========================================
 if __name__ == "__main__":
+    app.config["CORS_HEADERS"] = "Content-Type"
+
     init_db()
 
     port = int(os.environ.get("PORT", "5001"))
