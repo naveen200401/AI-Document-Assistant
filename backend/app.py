@@ -944,11 +944,12 @@ def debug_gemini():
 # =========================================
 # Main entry
 # =========================================
+
+# ✅ Ensure DB tables exist even when running under gunicorn on Render
+# (this runs once per worker process; CREATE TABLE IF NOT EXISTS is safe)
+init_db()
+
 if __name__ == "__main__":
-    app.config["CORS_HEADERS"] = "Content-Type"
-
-    init_db()
-
     port = int(os.environ.get("PORT", "5001"))
     print(
         f"Starting AI Docs backend (Gemini) on port {port} "
@@ -957,5 +958,5 @@ if __name__ == "__main__":
         f"PDF_AVAILABLE={PDF_AVAILABLE})"
     )
 
-    # In production (Render) you'll use gunicorn; for local dev:
+    # Local dev only; Render uses gunicorn
     app.run(host="0.0.0.0", port=port)
