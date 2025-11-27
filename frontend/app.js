@@ -1,8 +1,8 @@
-// frontend/app.js
 const { useState, useEffect } = React;
 
-// 🔧 IMPORTANT: your Render backend URL (NO trailing slash)
-const API_BASE = "https://ai-document-assistant-5o3z.onrender.com/";
+// 🔧 IMPORTANT: backend Flask URL (NO trailing slash)
+const API_BASE = "https://ai-document-assistant-ahek.onrender.com";
+
 
 /* ---------------- LOCAL STORAGE HELPERS (optional remember) ---------------- */
 
